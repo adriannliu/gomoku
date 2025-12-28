@@ -8,6 +8,7 @@ import {
     isBoardFull,
 } from "../utils/gameLogic";
 import Board from "./Board";
+import MctsWorker from "../ai/mcts-worker.ts?worker";
 
 type GameMode = "human" | "ai";
 
@@ -21,7 +22,7 @@ export default function Game() {
     const workerRef = useRef<Worker | null>(null);
 
     useEffect(() => {
-        workerRef.current = new Worker("/mcts-worker.js");
+        workerRef.current = new MctsWorker();
 
         workerRef.current.onmessage = (e) => {
             const { move } = e.data;
@@ -106,24 +107,47 @@ export default function Game() {
     };
 
     return (
-        <div style={{ padding: "20px" }}>
-            <h1>Gomoku</h1>
-            <div style={{ marginBottom: "10px" }}>
+        <div style={{ 
+            padding: "20px", 
+            display: "flex", 
+            flexDirection: "column", 
+            alignItems: "center"
+        }}>
+            <h1 style={{ marginBottom: "20px", textAlign: "center" }}>Gomoku</h1>
+            <div style={{ marginBottom: "15px" }}>
                 <button onClick={toggleMode}>
                     Mode: {gameMode === "ai" ? "vs AI" : "vs Human"}
                 </button>
             </div>
-            <div style={{ marginBottom: "10px" }}>
+            <div style={{ marginBottom: "15px", minHeight: "24px", display: "flex", alignItems: "center", justifyContent: "center" }}>
                 {gameOver
                     ? winner
                         ? `Player ${winner} wins!`
                         : "Draw!"
                     : isAiThinking
-                    ? "AI is thinking..."
+                    ? (
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                            <div 
+                                className="spinner"
+                                style={{
+                                    width: "20px",
+                                    height: "20px",
+                                    border: "3px solid rgba(100, 108, 255, 0.2)",
+                                    borderTopColor: "#646cff",
+                                    borderRadius: "50%",
+                                    animation: "spin 0.8s linear infinite",
+                                    flexShrink: 0
+                                }}
+                            ></div>
+                            <span>AI is thinking...</span>
+                        </div>
+                    )
                     : `Current player: ${currentPlayer}`}
             </div>
-            <Board board={board} onCellClick={handleCellClick} />
-            <button onClick={resetGame} style={{ marginTop: "10px" }}>
+            <div style={{ marginBottom: "20px", display: "flex", justifyContent: "center" }}>
+                <Board board={board} onCellClick={handleCellClick} />
+            </div>
+            <button onClick={resetGame}>
                 New Game
             </button>
         </div>
