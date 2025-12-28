@@ -1,307 +1,172 @@
 import type { BoardState, Player, MCTSNode } from './types';
-import { copyBoard, makeMove, checkWin, isValidMove, BOARD_SIZE } from '../utils/gameLogic';
-import { findWinningMove, findFour, findOpenThree, detectPattern } from './patterns';
+import { copyBoard, makeMove, checkWin, BOARD_SIZE } from '../utils/gameLogic';
+import { findWinningMove, findFour, findOpenThree } from './patterns';
 
 const UCB1_CONSTANT = 1.41;
 
-function getCandidateMoves(board: BoardState): [number, number][]
-{
-    const moves: [number, number][] = [];
+// --- Helper: Fast Coordinate Mapping ---
+const toIndex = (r: number, c: number) => r * BOARD_SIZE + c;
+const fromIndex = (i: number): [number, number] => [Math.floor(i / BOARD_SIZE), i % BOARD_SIZE];
+
+function getCandidateMoves(board: BoardState): number[] {
+    const moves: number[] = [];
+    const occupied = new Int8Array(BOARD_SIZE * BOARD_SIZE);
     let hasStones = false;
 
-    for (let r = 0; r < BOARD_SIZE; r++)
-    {
-        for (let c = 0; c < BOARD_SIZE; c++)
-        {
-            if (board[r][c] !== 0)
-            {
+    // 1. Mark occupied spots
+    for (let r = 0; r < BOARD_SIZE; r++) {
+        for (let c = 0; c < BOARD_SIZE; c++) {
+            if (board[r][c] !== 0) {
+                occupied[r * BOARD_SIZE + c] = 1;
                 hasStones = true;
-                break;
             }
         }
-        if (hasStones) break;
     }
 
-    if (!hasStones)
-    {
+    if (!hasStones) {
         const center = Math.floor(BOARD_SIZE / 2);
-        return [[center, center]];
+        return [toIndex(center, center)];
     }
 
-    const occupied = new Set<string>();
-    for (let r = 0; r < BOARD_SIZE; r++)
-    {
-        for (let c = 0; c < BOARD_SIZE; c++)
-        {
-            if (board[r][c] !== 0)
-            {
-                occupied.add(`${r},${c}`);
-            }
-        }
-    }
+    // 2. Collect empty spots within radius 2 of any stone
+    const candidates = new Int8Array(BOARD_SIZE * BOARD_SIZE);
+    const radius = 2; 
 
-    const candidates = new Set<string>();
-    for (const pos of occupied)
-    {
-        const [r, c] = pos.split(',').map(Number);
-        for (let dr = -2; dr <= 2; dr++)
-        {
-            for (let dc = -2; dc <= 2; dc++)
-            {
-                const nr = r + dr;
-                const nc = c + dc;
-                if (isValidMove(board, nr, nc))
-                {
-                    candidates.add(`${nr},${nc}`);
+    for (let r = 0; r < BOARD_SIZE; r++) {
+        for (let c = 0; c < BOARD_SIZE; c++) {
+            if (occupied[r * BOARD_SIZE + c] === 1) {
+                for (let dr = -radius; dr <= radius; dr++) {
+                    for (let dc = -radius; dc <= radius; dc++) {
+                        const nr = r + dr;
+                        const nc = c + dc;
+                        if (nr >= 0 && nr < BOARD_SIZE && nc >= 0 && nc < BOARD_SIZE) {
+                            const idx = nr * BOARD_SIZE + nc;
+                            if (occupied[idx] === 0) {
+                                candidates[idx] = 1; 
+                            }
+                        }
+                    }
                 }
             }
         }
     }
 
-    for (const pos of candidates)
-    {
-        const [r, c] = pos.split(',').map(Number);
-        moves.push([r, c]);
+    for (let i = 0; i < candidates.length; i++) {
+        if (candidates[i] === 1) {
+            moves.push(i);
+        }
     }
 
     return moves;
 }
 
-function createNode(board: BoardState, move: [number, number] | null, parent: MCTSNode | null, player: Player): MCTSNode
-{
+function createNode(board: BoardState, move: [number, number] | null, parent: MCTSNode | null, player: Player): MCTSNode {
     return {
         board: copyBoard(board),
         move,
         parent,
-        children: new Map(),
-        untriedMoves: getCandidateMoves(board),
+        children: new Map(), // Now Map<number, MCTSNode>
+        untriedMoves: getCandidateMoves(board), // Now number[]
         visits: 0,
         wins: 0,
         player
     };
 }
 
-function ucb1(node: MCTSNode, parentVisits: number): number
-{
-    if (node.visits === 0)
-    {
-        return Infinity;
-    }
+function ucb1(child: MCTSNode, parentVisits: number): number {
+    if (child.visits === 0) return Infinity;
+
+    const winRate = child.wins / child.visits;
+    // Invert win rate: We want the move where the opponent loses.
+    const exploitation = 1 - winRate; 
     
-    const exploitation = node.wins / node.visits;
-    const exploration = UCB1_CONSTANT * Math.sqrt(Math.log(parentVisits) / node.visits);
+    const exploration = UCB1_CONSTANT * Math.sqrt(Math.log(parentVisits) / child.visits);
     return exploitation + exploration;
 }
 
-function selectChild(node: MCTSNode): MCTSNode
-{
+function selectChild(node: MCTSNode): MCTSNode {
     let bestChild: MCTSNode | null = null;
     let bestValue = -Infinity;
 
-    for (const child of node.children.values())
-    {
+    for (const child of node.children.values()) {
         const value = ucb1(child, node.visits);
-        if (value > bestValue)
-        {
+        if (value > bestValue) {
             bestValue = value;
             bestChild = child;
         }
     }
-
     return bestChild!;
 }
 
-function select(node: MCTSNode): MCTSNode
-{
+function select(node: MCTSNode): MCTSNode {
     let current = node;
-    
-    while (current.untriedMoves.length === 0 && current.children.size > 0)
-    {
+    while (current.untriedMoves.length === 0 && current.children.size > 0) {
         current = selectChild(current);
     }
-    
     return current;
 }
 
-function expand(node: MCTSNode): MCTSNode
-{
-    if (node.untriedMoves.length === 0)
-    {
-        return node;
-    }
+function expand(node: MCTSNode): MCTSNode {
+    if (node.untriedMoves.length === 0) return node;
 
     const moveIndex = Math.floor(Math.random() * node.untriedMoves.length);
-    const move = node.untriedMoves[moveIndex];
+    const moveIdx = node.untriedMoves[moveIndex]; // Pure integer
     node.untriedMoves.splice(moveIndex, 1);
 
-    const [row, col] = move;
+    const [row, col] = fromIndex(moveIdx);
     const nextPlayer = node.player === 1 ? 2 : 1;
     const newBoard = makeMove(node.board, row, col, nextPlayer);
+
+    const child = createNode(newBoard, [row, col], node, nextPlayer);
     
-    const child = createNode(newBoard, move, node, nextPlayer);
-    node.children.set(`${row},${col}`, child);
-    
+    // Use integer key directly
+    node.children.set(moveIdx, child);
+
     return child;
 }
 
-function smartPlayout(board: BoardState, player: Player): [number, number] | null
-{
-    const candidates = getCandidateMoves(board);
-    if (candidates.length === 0) return null;
+function simulate(board: BoardState, player: Player, aiPlayer: Player): number {
+    const currentBoard = board.map(row => [...row]); 
+    let currentPlayer = player;
+    
+    const candidates = getCandidateMoves(currentBoard); // Returns number[]
 
-    const opponent = player === 1 ? 2 : 1;
+    for (let i = 0; i < 225; i++) {
+        let moveIdx = -1;
 
-    const myWin = findWinningMove(board, player);
-    if (myWin) return myWin;
-
-    const oppWin = findWinningMove(board, opponent);
-    if (oppWin) return oppWin;
-
-    const myFour = findFour(board, player);
-    if (myFour) return myFour;
-
-    const oppFour = findFour(board, opponent);
-    if (oppFour) return oppFour;
-
-    const oppThrees = findOpenThree(board, opponent);
-    if (oppThrees.length > 0)
-    {
-        return oppThrees[0];
-    }
-
-    const myThrees = findOpenThree(board, player);
-    if (myThrees.length > 0)
-    {
-        return myThrees[0];
-    }
-
-    return selectBestPositionalMove(board, candidates, player);
-}
-
-function selectBestPositionalMove(board: BoardState, candidates: [number, number][], player: Player): [number, number]
-{
-    let bestMove = candidates[0];
-    let bestScore = -Infinity;
-
-    for (const [r, c] of candidates)
-    {
-        const score = evaluatePosition(board, r, c, player);
-        if (score > bestScore)
-        {
-            bestScore = score;
-            bestMove = [r, c];
-        }
-    }
-
-    return bestMove;
-}
-
-function evaluatePosition(board: BoardState, row: number, col: number, player: Player): number
-{
-    let score = 0;
-    const opponent = player === 1 ? 2 : 1;
-
-    const center = Math.floor(BOARD_SIZE / 2);
-    const distanceFromCenter = Math.abs(row - center) + Math.abs(col - center);
-    score += (BOARD_SIZE - distanceFromCenter) * 2;
-
-    // simulate placing the stone
-    const tempBoard = makeMove(board, row, col, player);
-
-    const directions = [[1, 0], [0, 1], [1, 1], [1, -1]];
-    for (const [dr, dc] of directions)
-    {
-        const myPattern = detectPattern(tempBoard, row, col, dr, dc, player);
-        const oppPattern = detectPattern(board, row, col, dr, dc, opponent);
-
-        // my patterns
-        if (myPattern.count === 4)
-        {
-            score += 10000;
-        }
-        else if (myPattern.count === 3 && myPattern.openEnds === 2)
-        {
-            score += 1000;
-        }
-        else if (myPattern.count === 3 && myPattern.openEnds === 1)
-        {
-            score += 200;
-        }
-        else if (myPattern.count === 2 && myPattern.openEnds === 2)
-        {
-            score += 100;
-        }
-        else if (myPattern.count === 2 && myPattern.openEnds === 1)
-        {
-            score += 30;
-        }
-        else if (myPattern.count === 1 && myPattern.openEnds === 2)
-        {
-            score += 10;
-        }
-
-        // opponent patterns (defensive)
-        if (oppPattern.count === 4)
-        {
-            score += 5000;
-        }
-        else if (oppPattern.count === 3 && oppPattern.openEnds === 2)
-        {
-            score += 800;
-        }
-        else if (oppPattern.count === 3 && oppPattern.openEnds === 1)
-        {
-            score += 150;
-        }
-        else if (oppPattern.count === 2 && oppPattern.openEnds === 2)
-        {
-            score += 80;
-        }
-        else if (oppPattern.count === 2 && oppPattern.openEnds === 1)
-        {
-            score += 25;
-        }
-    }
-
-    let adjacentStones = 0;
-    for (let dr = -1; dr <= 1; dr++)
-    {
-        for (let dc = -1; dc <= 1; dc++)
-        {
-            if (dr === 0 && dc === 0) continue;
-            const nr = row + dr;
-            const nc = col + dc;
-            if (nr >= 0 && nr < BOARD_SIZE && nc >= 0 && nc < BOARD_SIZE && board[nr][nc] !== 0)
-            {
-                adjacentStones++;
+        // 1. Check Immediate Win
+        const winMove = findWinningMove(currentBoard, currentPlayer);
+        if (winMove) {
+            moveIdx = toIndex(winMove[0], winMove[1]);
+        } else {
+            // 2. Block Immediate Loss
+            const opponent = currentPlayer === 1 ? 2 : 1;
+            const blockMove = findWinningMove(currentBoard, opponent);
+            if (blockMove) {
+                moveIdx = toIndex(blockMove[0], blockMove[1]);
+            } else {
+                // 3. Random Valid Move
+                let attempts = 0;
+                while (attempts < 15) {
+                    const rnd = candidates[Math.floor(Math.random() * candidates.length)];
+                    const [r, c] = fromIndex(rnd);
+                    if (currentBoard[r][c] === 0) {
+                        moveIdx = rnd;
+                        break;
+                    }
+                    attempts++;
+                }
             }
         }
-    }
-    score += adjacentStones * 10;
 
-    return score;
-}
+        if (moveIdx === -1) break; 
 
-function simulate(board: BoardState, player: Player): number
-{
-    let currentBoard = copyBoard(board);
-    let currentPlayer = player;
+        const [r, c] = fromIndex(moveIdx);
+        currentBoard[r][c] = currentPlayer;
 
-    for (let i = 0; i < 225; i++)
-    {
-        const move = smartPlayout(currentBoard, currentPlayer);
-        if (!move)
-        {
-            return 0.5;
-        }
-
-        const [row, col] = move;
-        currentBoard = makeMove(currentBoard, row, col, currentPlayer);
-
-        const result = checkWin(currentBoard, row, col);
-        if (result.winner)
-        {
-            return result.winner === 2 ? 1 : 0;
+        const result = checkWin(currentBoard, r, c);
+        if (result.winner) {
+            return result.winner === aiPlayer ? 1 : 0;
         }
 
         currentPlayer = currentPlayer === 1 ? 2 : 1;
@@ -310,115 +175,88 @@ function simulate(board: BoardState, player: Player): number
     return 0.5;
 }
 
-function backpropagate(node: MCTSNode | null, result: number): void
-{
+function backpropagate(node: MCTSNode | null, result: number, aiPlayer: Player): void {
     let current = node;
-    
-    while (current !== null)
-    {
+    while (current !== null) {
         current.visits++;
-        if (current.player === 2)
-        {
+        if (current.player === aiPlayer) {
             current.wins += result;
-        }
-        else
-        {
+        } else {
             current.wins += (1 - result);
         }
         current = current.parent;
     }
 }
 
-function findBestMove(board: BoardState, iterations: number): [number, number]
-{
-    const immediateWin = findWinningMove(board, 2);
-    if (immediateWin)
-    {
-        return immediateWin;
-    }
+function findBestMove(board: BoardState, iterations: number, aiPlayer: Player): [number, number] {
+    const opponent = aiPlayer === 1 ? 2 : 1;
+    
+    // 1. INSTINCT LAYER
+    const immediateWin = findWinningMove(board, aiPlayer);
+    if (immediateWin) return immediateWin;
 
-    const blockOpponentWin = findWinningMove(board, 1);
-    if (blockOpponentWin)
-    {
-        return blockOpponentWin;
-    }
+    const blockOpponentWin = findWinningMove(board, opponent);
+    if (blockOpponentWin) return blockOpponentWin;
 
-    const myFour = findFour(board, 2);
-    if (myFour)
-    {
-        return myFour;
-    }
+    const oppFour = findFour(board, opponent);
+    if (oppFour) return oppFour;
 
-    const oppFour = findFour(board, 1);
-    if (oppFour)
-    {
-        return oppFour;
-    }
+    const myFour = findFour(board, aiPlayer);
+    if (myFour) return myFour;
 
-    // block opponent's open threes (critical defensive move)
-    const oppOpenThrees = findOpenThree(board, 1);
-    if (oppOpenThrees.length > 0)
-    {
-        // if multiple open threes, prioritize blocking the most dangerous one
-        // for now, just block the first one found
-        return oppOpenThrees[0];
-    }
+    const oppOpenThrees = findOpenThree(board, opponent);
+    if (oppOpenThrees.length > 0) return oppOpenThrees[0];
+    
+    // 2. MCTS LAYER
+    const root = createNode(board, null, null, aiPlayer);
+    const safeIterations = Math.max(iterations, 1000);
 
-    // create my own open three if possible
-    const myOpenThrees = findOpenThree(board, 2);
-    if (myOpenThrees.length > 0)
-    {
-        return myOpenThrees[0];
-    }
-
-    const root = createNode(board, null, null, 2);
-
-    for (let i = 0; i < iterations; i++)
-    {
+    for (let i = 0; i < safeIterations; i++) {
         const node = select(root);
-        const expandedNode = expand(node);
-        const result = simulate(expandedNode.board, expandedNode.player === 1 ? 2 : 1);
-        backpropagate(expandedNode, result);
-    }
-
-    let bestMove: [number, number] | null = null;
-    let bestScore = -Infinity;
-
-    for (const child of root.children.values())
-    {
-        if (child.visits === 0) continue;
         
-        // combine win rate and visit count for better selection
-        const winRate = child.wins / child.visits;
-        const score = winRate * 0.7 + (child.visits / iterations) * 0.3;
-        
-        if (score > bestScore)
-        {
-            bestScore = score;
-            bestMove = child.move!;
-        }
-    }
-
-    // fallback: if no good move found, use most visited
-    if (!bestMove)
-    {
-        let mostVisits = -1;
-        for (const child of root.children.values())
-        {
-            if (child.visits > mostVisits)
-            {
-                mostVisits = child.visits;
-                bestMove = child.move!;
+        let isTerminal = false;
+        if (node.move) {
+            const winState = checkWin(node.board, node.move[0], node.move[1]);
+            if (winState.winner) {
+                const result = winState.winner === aiPlayer ? 1 : 0;
+                backpropagate(node, result, aiPlayer);
+                isTerminal = true;
             }
         }
+
+        if (!isTerminal) {
+            const expandedNode = expand(node);
+            const result = simulate(expandedNode.board, expandedNode.player === aiPlayer ? opponent : aiPlayer, aiPlayer);
+            backpropagate(expandedNode, result, aiPlayer);
+        }
     }
 
-    return bestMove || getCandidateMoves(board)[0];
+    let bestChild: MCTSNode | null = null;
+    let maxVisits = -1;
+
+    for (const child of root.children.values()) {
+        if (child.visits > maxVisits) {
+            maxVisits = child.visits;
+            bestChild = child;
+        }
+    }
+
+    if (bestChild && bestChild.move) {
+        return bestChild.move;
+    }
+
+    const fallback = getCandidateMoves(board);
+    if (fallback.length > 0) return fromIndex(fallback[0]);
+    return [7, 7];
 }
 
-self.onmessage = function(e)
-{
-    const { board, iterations } = e.data;
-    const bestMove = findBestMove(board, iterations);
-    self.postMessage({ move: bestMove });
+self.onmessage = function(e) {
+    const { board, iterations, aiPlayer } = e.data;
+    try {
+        const bestMove = findBestMove(board, iterations || 3000, aiPlayer || 2);
+        self.postMessage({ move: bestMove });
+    } catch (err) {
+        console.error("Worker MCTS Error:", err);
+        self.postMessage({ move: null }); 
+    }
 };

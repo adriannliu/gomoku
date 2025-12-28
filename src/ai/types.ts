@@ -5,10 +5,14 @@ export type BoardState = Cell[][];
 export interface MCTSNode
 {
     board: BoardState;
-    move: [number, number] | null;
+    // The move that led to this node (stored as [r, c] for easy debugging/compatibility)
+    move: [number, number] | null; 
+    
     parent: MCTSNode | null;
-    children: Map<string, MCTSNode>;
-    untriedMoves: [number, number][];
+    
+    // Optimization: Use integer keys (0-224) instead of strings ("7,7")
+    children: Map<number, MCTSNode>; 
+    untriedMoves: number[]; 
     visits: number;
     wins: number;
     player: Player;

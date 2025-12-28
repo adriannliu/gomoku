@@ -4,9 +4,10 @@ import { BOARD_SIZE } from "../utils/gameLogic";
 interface BoardProps {
     board: BoardState;
     onCellClick: (row: number, col: number) => void;
+    moveNumbers?: number[][] | null;
 }
 
-export default function Board({ board, onCellClick }: BoardProps) {
+export default function Board({ board, onCellClick, moveNumbers }: BoardProps) {
     const cellSize = 30;
 
     return (
@@ -40,21 +41,36 @@ export default function Board({ board, onCellClick }: BoardProps) {
                 row.map(
                     (cell, c) =>
                         cell !== 0 && (
-                            <circle
-                                key={`${r}-${c}`}
-                                cx={c * cellSize + cellSize / 2}
-                                cy={r * cellSize + cellSize / 2}
-                                r={cellSize * 0.4}
-                                fill={cell === 1 ? "#000" : "#fff"}
-                                stroke={cell === 2 ? "#000" : "none"}
-                                strokeWidth="2"
-                            />
+                            <g key={`${r}-${c}`}>
+                                <circle
+                                    cx={c * cellSize + cellSize / 2}
+                                    cy={r * cellSize + cellSize / 2}
+                                    r={cellSize * 0.4}
+                                    fill={cell === 1 ? "#000" : "#fff"}
+                                    stroke={cell === 2 ? "#000" : "none"}
+                                    strokeWidth="2"
+                                />
+                                {moveNumbers && moveNumbers[r][c] > 0 && (
+                                    <text
+                                        x={c * cellSize + cellSize / 2}
+                                        y={r * cellSize + cellSize / 2}
+                                        textAnchor="middle"
+                                        dominantBaseline="central"
+                                        fill={cell === 1 ? "#fff" : "#000"}
+                                        fontSize={cellSize * 0.35}
+                                        fontWeight="bold"
+                                        style={{ pointerEvents: "none", userSelect: "none" }}
+                                    >
+                                        {moveNumbers[r][c]}
+                                    </text>
+                                )}
+                            </g>
                         )
                 )
             )}
 
             {board.map((row, r) =>
-                row.map((cell, c) => (
+                row.map((_, c) => (
                     <rect
                         key={`click-${r}-${c}`}
                         x={c * cellSize}
