@@ -14,8 +14,8 @@ Before searching, the AI scans for critical patterns to react instantly:
 
 ### 2. MCTS Layer
 If no immediate threats exist, it switches to Monte Carlo Tree Search (UCB1):
-* Optimizes for moves that minimize the opponent's win rate (defensive-aggressive).
-* Simulations are not purely random; they include basic competency checks to make win/loss data more accurate.
+1. Optimizes for moves that minimize the opponent's win rate.
+2. Simulations are not purely random; they include basic competency checks to make win/loss data more accurate.
 
 ## Performance Optimizations
 
