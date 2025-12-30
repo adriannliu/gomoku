@@ -116,3 +116,65 @@ export function findOpenThree(board: BoardState, player: Player): [number, numbe
     }
     return moves;
 }
+
+/**
+ * Returns all moves that create a "Four" (4 consecutive stones) or a "Five".
+ * These are forcing moves for VCF.
+ */
+export function getForcingMoves(board: BoardState, player: Player): [number, number][] {
+    const moves: [number, number][] = [];
+    const directions = [[1, 0], [0, 1], [1, 1], [1, -1]];
+    // Optimization: Only check empty spots near existing stones
+    // For now, we iterate all, but in MCTS we use candidate list.
+    // Here we need accuracy for VCF.
+    
+    // To make it faster, we could pass candidates, but for now strict iteration 
+    // on empty cells around existing stones would be better.
+    // Let's stick to simple iteration for simplicity in this step, 
+    // or use a helper if performance is an issue.
+    // Given 15x15, full iteration is ~225 * 4 = 900 checks. 
+    // For VCF depth, this might be called many times. 
+    // We will optimize by only checking neighbors of existing stones inside the loop if needed.
+
+    for (let r = 0; r < BOARD_SIZE; r++) {
+        for (let c = 0; c < BOARD_SIZE; c++) {
+            if (board[r][c] !== 0) continue;
+
+            let isForcing = false;
+            for (const [dr, dc] of directions) {
+                const { count } = detectPattern(board, r, c, dr, dc, player);
+                if (count >= 4) {
+                    isForcing = true;
+                    break;
+                }
+            }
+            if (isForcing) {
+                moves.push([r, c]);
+            }
+        }
+    }
+    return moves;
+}
+
+/**
+ * Checks if the board state contains any immediate threats for the player 
+ * (Open Three, Four, or Five) that require a response.
+ */
+export function hasThreats(board: BoardState, player: Player): boolean {
+    const directions = [[1, 0], [0, 1], [1, 1], [1, -1]];
+    
+    for (let r = 0; r < BOARD_SIZE; r++) {
+        for (let c = 0; c < BOARD_SIZE; c++) {
+            if (board[r][c] !== 0) continue;
+
+            for (const [dr, dc] of directions) {
+                const { count, openEnds } = detectPattern(board, r, c, dr, dc, player);
+                // Four or Five is a threat
+                if (count >= 4) return true;
+                // Open Three is a threat
+                if (count === 3 && openEnds === 2) return true;
+            }
+        }
+    }
+    return false;
+}
