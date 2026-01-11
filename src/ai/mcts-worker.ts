@@ -11,12 +11,8 @@ const toIndex = (r: number, c: number) => r * BOARD_SIZE + c;
 const fromIndex = (i: number): [number, number] => [Math.floor(i / BOARD_SIZE), i % BOARD_SIZE];
 
 // --- Opening Book ---
-// Simple dictionary for first few moves (Center starts at 7,7)
-// Note: We implement checkOpeningBook with logic rather than strict dictionary lookup 
-// to handle transpositions or simple state matching better.
-
+// Simple logic to handle standard openings and responses
 function checkOpeningBook(board: BoardState): [number, number] | null {
-    // Match specific board states for first 1-3 moves
     let stones: {r: number, c: number, p: number}[] = [];
     for (let r = 0; r < BOARD_SIZE; r++) {
         for (let c = 0; c < BOARD_SIZE; c++) {
@@ -24,27 +20,26 @@ function checkOpeningBook(board: BoardState): [number, number] | null {
         }
     }
 
+    // 1. First move: Center
     if (stones.length === 0) return [7, 7];
-    if (stones.length === 1 && stones[0].r === 7 && stones[0].c === 7) return [8, 8]; // If we are white and they played center
+
+    // 2. Second move (White): If Black played center, play diagonal
+    if (stones.length === 1 && stones[0].r === 7 && stones[0].c === 7) return [8, 8]; 
     
-    // If we are Black (stones=2) and we played 7,7 and they played 8,8 (or equivalent)
+    // 3. Third move (Black): If White played diagonal, play direct 3
     if (stones.length === 2) {
-         // Check if one is 7,7
          const hasCenter = stones.some(s => s.r === 7 && s.c === 7);
-         if (hasCenter) return [8, 7]; // Play direct 3
+         if (hasCenter) return [8, 7]; 
     }
 
     return null;
 }
 
 // --- Influence Map Helper ---
+// biases random selection towards moves near existing stones
 function getMoveWithInfluence(board: BoardState, candidates: number[]): number {
-    // If no candidates, return -1
     if (candidates.length === 0) return -1;
 
-    // Simple Influence: +1 for each neighbor (radius 2)
-    // We want to pick a candidate with high overlap.
-    // Instead of full map, just score candidates.
     let bestScore = -1;
     let bestMoves: number[] = [];
     
@@ -75,12 +70,11 @@ function getMoveWithInfluence(board: BoardState, candidates: number[]): number {
         }
     }
     
-    // Randomly pick from best moves to maintain variety but biased
     return bestMoves[Math.floor(Math.random() * bestMoves.length)];
 }
 
 // --- VCF Solver ---
-// Returns winning move if found, else null
+// Returns winning move if found via continuous threats, else null
 function solveVCF(board: BoardState, player: Player, depth: number, startTime: number): [number, number] | null {
     if (depth === 0 || Date.now() - startTime > VCF_TIME_LIMIT) return null;
 
@@ -88,60 +82,35 @@ function solveVCF(board: BoardState, player: Player, depth: number, startTime: n
     const forcingMoves = getForcingMoves(board, player);
     if (forcingMoves.length === 0) return null;
 
-    // Sort to prioritize moves closer to existing stones or center? 
-    // For now, just iterate.
-
     for (const [r, c] of forcingMoves) {
-        // Try move
         const nextBoard = makeMove(board, r, c, player);
         
-        // Did we win? (Five)
+        // Did we win immediately? (Five)
         if (checkWin(nextBoard, r, c).winner === player) {
             return [r, c];
         }
 
-        // Opponent must block.
-        // We need to find the opponent's forced response.
-        // If we created a "Four", the opponent MUST play on the open end(s).
-        // If we created a "Broken Four" (X X _ X X), they must play the gap.
-        
+        // Opponent must block. We calculate their forced response.
         const opponent = player === 1 ? 2 : 1;
-        // Find opponent's winning move (which is the block for our 4)
-        // If opponent has a winning move (making 5), then our previous move was suicide (unless we already won, checked above).
-        // Wait, here we look for opponent's "Four" counters.
-        // Actually, if we made a 4, the opponent needs to block it. 
-        // Blocking it means playing on a spot that prevents us from making 5 next turn.
-        // That spot is exactly where *we* would play to make 5.
         
-        const threat = findWinningMove(nextBoard, player); // Where we would win next
-        if (!threat) {
-             // We didn't create a real threat? (Maybe it was a blocked 4? But getForcingMoves checks count >=4)
-             // If count >= 4 and we didn't win, it must be an open 3 that became open 4, or broken 4.
-             // If it's a blocked 4, it's not a threat unless we have another line.
-             // Let's assume valid threats exist.
-             continue; 
-        }
+        // Find where the opponent MUST play to stop the win
+        const threat = findWinningMove(nextBoard, player); 
+        if (!threat) continue; 
 
-        // The opponent MUST play 'threat' to block us.
-        // (Assuming single threat. If double threat (4-3 or 4-4), we win next turn regardless of block, 
-        // but findWinningMove only returns one. In VCF, we assume single path dominance usually).
-        
-        const blockR = threat[0];
-        const blockC = threat[1];
+        const [blockR, blockC] = threat;
 
         // Opponent makes the forced block
         const blockedBoard = makeMove(nextBoard, blockR, blockC, opponent);
 
-        // Does opponent win by blocking? (e.g. they made 5)
+        // Does opponent win by blocking?
         if (checkWin(blockedBoard, blockR, blockC).winner === opponent) {
-             continue; // This line fails, opponent wins
+             continue; 
         }
 
-        // Continue search
+        // Recursive Step: Can we win from this new state?
         const result = solveVCF(blockedBoard, player, depth - 1, startTime);
         if (result) {
-            // Found a winning path starting with this move
-            return [r, c];
+            return [r, c]; // This move leads to a win
         }
     }
 
@@ -154,7 +123,6 @@ function getCandidateMoves(board: BoardState): number[] {
     const occupied = new Int8Array(BOARD_SIZE * BOARD_SIZE);
     let hasStones = false;
 
-    // 1. Mark occupied spots
     for (let r = 0; r < BOARD_SIZE; r++) {
         for (let c = 0; c < BOARD_SIZE; c++) {
             if (board[r][c] !== 0) {
@@ -169,13 +137,10 @@ function getCandidateMoves(board: BoardState): number[] {
         return [toIndex(center, center)];
     }
 
-    // 2. Collect empty spots within radius 2 of any stone
-    // Optimization: Use a Set or boolean array to avoid duplicates if iterating stones
-    // Current approach scans full board which is O(N^2). Fine for 15x15.
-    
     const candidates = new Int8Array(BOARD_SIZE * BOARD_SIZE);
     const radius = 2; 
 
+    // Collect empty spots within radius 2 of any stone
     for (let r = 0; r < BOARD_SIZE; r++) {
         for (let c = 0; c < BOARD_SIZE; c++) {
             if (occupied[r * BOARD_SIZE + c] === 1) {
@@ -204,15 +169,12 @@ function getCandidateMoves(board: BoardState): number[] {
     return moves;
 }
 
-// --- TSS Integration ---
+// --- TSS (Threat Space Search) Integration ---
 function getExpansionMoves(board: BoardState, player: Player): number[] {
     const opponent = player === 1 ? 2 : 1;
     
     // Check if we are under threat (Opponent can make 5 or 4)
-    // 1. Check "Five" threat (Opponent can win immediately)
     const blockWin = findWinningMove(board, opponent);
-    
-    // 2. Check "Four" threat (Opponent can make a 4, forcing us)
     const oppForcing = getForcingMoves(board, opponent);
     
     const isUnderThreat = blockWin || oppForcing.length > 0;
@@ -220,21 +182,17 @@ function getExpansionMoves(board: BoardState, player: Player): number[] {
     if (isUnderThreat) {
         const tacticalMoves = new Set<number>();
         
-        // A. Must block
+        // A. Must block immediate win
         if (blockWin) {
-            // If they can win, we MUST play there (unless we can win ourselves immediately, handled below)
             tacticalMoves.add(toIndex(blockWin[0], blockWin[1]));
         }
         
+        // B. Block potential Fours
         for (const [r, c] of oppForcing) {
-            // These are moves the opponent WANTS to play.
-            // We can block them by playing there ourselves.
-            // Or we can play a move that defends (e.g. extending our own line).
-            // For TSS, we treat "occupying the threat spot" as the primary block.
             tacticalMoves.add(toIndex(r, c));
         }
         
-        // B. Or we create a stronger counter-threat (Make 4 or 5)
+        // C. Or create a stronger counter-threat (Make 4 or 5)
         const myForcing = getForcingMoves(board, player);
         for (const [r, c] of myForcing) {
             tacticalMoves.add(toIndex(r, c));
@@ -242,7 +200,6 @@ function getExpansionMoves(board: BoardState, player: Player): number[] {
         
         const myWins = findWinningMove(board, player);
         if (myWins) {
-            // If we can win, that overrides everything!
             return [toIndex(myWins[0], myWins[1])]; 
         }
 
@@ -251,7 +208,6 @@ function getExpansionMoves(board: BoardState, player: Player): number[] {
         }
     }
     
-    // If no immediate threats, return standard candidates (Radius 2)
     return getCandidateMoves(board);
 }
 
@@ -261,7 +217,7 @@ function createNode(board: BoardState, move: [number, number] | null, parent: MC
         move,
         parent,
         children: new Map(), 
-        untriedMoves: getExpansionMoves(board, player), // Use TSS Logic
+        untriedMoves: getExpansionMoves(board, player),
         visits: 0,
         wins: 0,
         player
@@ -272,9 +228,7 @@ function ucb1(child: MCTSNode, parentVisits: number): number {
     if (child.visits === 0) return Infinity;
 
     const winRate = child.wins / child.visits;
-    // Invert win rate: We want the move where the opponent loses.
-    const exploitation = 1 - winRate; 
-    
+    const exploitation = winRate; 
     const exploration = UCB1_CONSTANT * Math.sqrt(Math.log(parentVisits) / child.visits);
     return exploitation + exploration;
 }
@@ -305,7 +259,7 @@ function expand(node: MCTSNode): MCTSNode {
     if (node.untriedMoves.length === 0) return node;
 
     const moveIndex = Math.floor(Math.random() * node.untriedMoves.length);
-    const moveIdx = node.untriedMoves[moveIndex]; // Pure integer
+    const moveIdx = node.untriedMoves[moveIndex]; 
     node.untriedMoves.splice(moveIndex, 1);
 
     const [row, col] = fromIndex(moveIdx);
@@ -313,8 +267,6 @@ function expand(node: MCTSNode): MCTSNode {
     const newBoard = makeMove(node.board, row, col, nextPlayer);
 
     const child = createNode(newBoard, [row, col], node, nextPlayer);
-    
-    // Use integer key directly
     node.children.set(moveIdx, child);
 
     return child;
@@ -323,16 +275,6 @@ function expand(node: MCTSNode): MCTSNode {
 function simulate(board: BoardState, player: Player, aiPlayer: Player): number {
     const currentBoard = board.map(row => [...row]); 
     let currentPlayer = player;
-    
-    // Get candidates once at the start? 
-    // The board changes, so valid moves change. 
-    // Optimizing simulate is key.
-    // Re-calculating candidates every step is slow.
-    // Standard MCTS keeps a list of available moves.
-    // For Gomoku, we only care about moves near stones.
-    // Let's use the loose "candidates" list from start, updating it?
-    // Too complex for zero-allocation strictness. 
-    // Let's stick to generating candidates but maybe optimize frequency.
     
     for (let i = 0; i < 225; i++) {
         let moveIdx = -1;
@@ -350,13 +292,9 @@ function simulate(board: BoardState, player: Player, aiPlayer: Player): number {
             } else {
                 // 3. Positional Influence (Soft Random)
                 const candidates = getCandidateMoves(currentBoard);
-                // Bias selection
                 moveIdx = getMoveWithInfluence(currentBoard, candidates);
                 
-                if (moveIdx === -1) {
-                     // No moves left
-                     break; 
-                }
+                if (moveIdx === -1) break; 
             }
         }
 
@@ -409,19 +347,16 @@ function findBestMove(board: BoardState, iterations: number, aiPlayer: Player): 
     // 2. VCF SOLVER (Victory by Continuous Fours)
     const startTime = Date.now();
     
-    // A. Check for OUR VCF (Offense)
-    // Try to find a forced win for us.
+    // A. Offense: Can we force a win?
     const myVCF = solveVCF(board, aiPlayer, VCF_MAX_DEPTH, startTime);
     if (myVCF) return myVCF;
 
-    // B. Check for OPPONENT VCF (Defense)
-    // If opponent has a forced win, we MUST block the starting move.
-    // Note: This assumes taking their starting square breaks the chain.
-    // (Usually true in Gomoku as the start move is the first "Four")
+    // B. Defense: Can they force a win?
+    // Note: We check this to BLOCK it immediately.
     const oppVCF = solveVCF(board, opponent, VCF_MAX_DEPTH, Date.now());
     if (oppVCF) return oppVCF;
 
-    // Standard Instincts (Fallbacks before expensive MCTS)
+    // Standard Instincts (Fallbacks)
     const oppFour = findFour(board, opponent);
     if (oppFour) return oppFour;
 
@@ -432,12 +367,9 @@ function findBestMove(board: BoardState, iterations: number, aiPlayer: Player): 
     if (oppOpenThrees.length > 0) return oppOpenThrees[0];
     
     // 3. MCTS LAYER
-    const root = createNode(board, null, null, aiPlayer);
+    const root = createNode(board, null, null, opponent);
     const safeIterations = Math.max(iterations, 1000);
 
-    // Adjust iterations if VCF took time? 
-    // VCF has time limit (50ms), so it shouldn't eat too much into MCTS budget.
-    
     for (let i = 0; i < safeIterations; i++) {
         const node = select(root);
         
@@ -473,7 +405,6 @@ function findBestMove(board: BoardState, iterations: number, aiPlayer: Player): 
     }
 
     const fallback = getCandidateMoves(board);
-    // Use influence for fallback too
     const fallbackIdx = getMoveWithInfluence(board, fallback);
     if (fallbackIdx !== -1) return fromIndex(fallbackIdx);
     
